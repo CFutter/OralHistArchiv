@@ -42,22 +42,22 @@ src/
 ├── content/          # Markdown content (multi-language)
 │   ├── config.ts
 │   └── pages/
-│       ├── contact.de.md
-│       ├── contact.en.md
-│       ├── contact.fr.md
-│       ├── further-information.de.md
-│       ├── further-information.en.md
-│       ├── further-information.fr.md
-│       ├── home.de.md
-│       ├── home.en.md
-│       └── home.fr.md
+│       ├── contactde.md
+│       ├── contacten.md
+│       ├── contactfr.md
+│       ├── furtherinformationde.md
+│       ├── furtherinformationen.md
+│       ├── furtherinformationfr.md
+│       ├── homede.md
+│       ├── homeen.md
+│       └── homefr.md
 ├── i18n/
 │   └── strings.ts    # UI translations and locale config
 ├── layouts/
 │   └── BaseLayout.astro
 ├── pages/
 │   ├── contact.astro
-│   ├── further-information.astro
+│   ├── furtherinformation.astro
 │   └── index.astro
 ├── scripts/
 │   ├── langSwitch.ts
