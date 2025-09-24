@@ -222,6 +222,11 @@ const displayItems = filtered.map(i => toDisplay(i, langPrefs));
 const contentSlug = `home${locale}`;
 let heroEntry = await getEntry('pages', contentSlug);
 if (!heroEntry) heroEntry = await getEntry('pages', 'homeen');
+
+if (!heroEntry) {
+  throw new Error(`Content entry '${contentSlug}' or fallback 'homeen' not found.`);
+}
+
 const { Content: HomeBody } = await heroEntry.render();
 const hero = heroEntry.data;
 ---
