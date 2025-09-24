@@ -1,0 +1,50 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { getEntry } from 'astro:content';
+import type { Locale } from '../i18n/strings';
+
+function parseAcceptLanguage(header: string | null): string[] {
+  if (!header) return ['en','de','fr'];
+  return header
+    .split(',')
+    .map(part => {
+      const [langPart, qPart] = part.trim().split(';');
+      const q = qPart?.split('=')[1];
+      return { lang: langPart.toLowerCase(), q: q ? parseFloat(q) : 1 };
+    })
+    .sort((a, b) => b.q - a.q)
+    .map(x => x.lang.split('-')[0])
+    .filter((v, i, arr) => !!v && arr.indexOf(v) === i)
+    .concat(['en','de','fr']);
+}
+function getCookieLang(cookieHeader: string | null): string | null {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(';')) {
+    const [k, v] = part.trim().split('=');
+    if (k === 'lang' && v) return v;
+  }
+  return null;
+}
+function getPreferredLocale(Astro: any) {
+  const supported = ['en','de','fr'];
+  const urlLang = Astro.url.searchParams.get('lang');
+  if (urlLang && supported.includes(urlLang)) return urlLang as 'en'|'de'|'fr';
+  const cookieLang = getCookieLang(Astro.request.headers.get('cookie'));
+  if (cookieLang && supported.includes(cookieLang)) return cookieLang as 'en'|'de'|'fr';
+  const prefs = parseAcceptLanguage(Astro.request.headers.get('accept-language'));
+  const first = prefs.find(p => supported.includes(p));
+  return (first as 'en'|'de'|'fr') || 'en';
+}
+
+const locale = getPreferredLocale(Astro);
+
+const slug = `furtherinformation${locale}`;
+let entry = await getEntry('pages', slug);
+if (!entry) entry = await getEntry('pages', 'furtherinformationen');
+const { Content } = await entry.render();
+const data = entry.data;
+---
+<BaseLayout title={data.title} locale={locale}>
+  <h1>{data.title}</h1>
+  <Content />
+</BaseLayout>

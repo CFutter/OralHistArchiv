@@ -1,0 +1,11 @@
+---
+import { getLocale, getLangFromUrl } from "../i18n/utils";
+
+const lang = getLangFromUrl(Astro.url);
+---
+
+<div class="flex items-center gap-4">
+  <a href={`/en/`} class:list={{ "font-bold": lang === "en" }}>EN</a>
+  <a href={`/de/`} class:list={{ "font-bold": lang === "de" }}>DE</a>
+  <a href={`/fr/`} class:list={{ "font-bold": lang === "fr" }}>FR</a>
+</div>

@@ -1,11 +1,334 @@
 ---
-import Welcome from '../components/Welcome.astro';
-import Layout from '../layouts/Layout.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
 
-// Welcome to Astro! Wondering what to do next? Check out the Astro documentation at https://docs.astro.build
-// Don't want to use any of this? Delete everything in this file, the `assets`, `components`, and `layouts` directories, and start fresh.
+export const prerender = false;
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { getEntry } from 'astro:content';
+import type { Locale } from '../i18n/strings'
+import { UI } from '../i18n/strings'
+
+/* ---------- Locale helpers ---------- */
+function parseAcceptLanguage(header: string | null): string[] {
+  if (!header) return ['en','de','fr'];
+  return header
+    .split(',')
+    .map(part => {
+      const [langPart, qPart] = part.trim().split(';');
+      const q = qPart?.split('=')[1];
+      return { lang: langPart.toLowerCase(), q: q ? parseFloat(q) : 1 };
+    })
+    .sort((a, b) => b.q - a.q)
+    .map(x => x.lang.split('-')[0])
+    .filter((v, i, arr) => !!v && arr.indexOf(v) === i)
+    .concat(['en','de','fr']);
+}
+function getCookieLang(cookieHeader: string | null): string | null {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(';')) {
+    const [k, v] = part.trim().split('=');
+    if (k === 'lang' && v) return v;
+  }
+  return null;
+}
+function getPreferredLocale(Astro: any): Locale {
+  const supported = ['en','de','fr'];
+  const urlLang = Astro.url.searchParams.get('lang');
+  if (urlLang && supported.includes(urlLang)) return urlLang as Locale;
+  const cookieLang = getCookieLang(Astro.request.headers.get('cookie'));
+  if (cookieLang && supported.includes(cookieLang)) return cookieLang as Locale;
+  const prefs = parseAcceptLanguage(Astro.request.headers.get('accept-language'));
+  const first = prefs.find(p => supported.includes(p));
+  return (first as Locale) || 'en';
+}
+
+/* ---------- Swissubase config ---------- */
+type AnyObj = Record<string, any>;
+const API_URL = 'https://demo.swissubase.ch/api/v2/catalogue/search';
+const PAGE_SIZE = 50;
+const MAX_ITEMS = 200;
+const FIXED_QUERY = 'linguistics';
+
+const CACHE_DIR = path.resolve(process.cwd(), 'data', 'cache');
+const CACHE_FILE = path.join(CACHE_DIR, 'swissubase.json');
+
+/* ---------- Multi-language helpers ---------- */
+type LangObj = { [k: string]: string } | string | null | undefined;
+function firstString(val: LangObj, prefs: string[]): string | undefined {
+  if (!val) return undefined;
+  if (typeof val === 'string') return val;
+  if (typeof val === 'object') {
+    for (const p of prefs) {
+      const v = (val as any)[p];
+      if (typeof v === 'string' && v) return v;
+    }
+    const firstKey = Object.keys(val)[0];
+    const fv = firstKey ? (val as any)[firstKey] : undefined;
+    if (typeof fv === 'string') return fv;
+  }
+  return undefined;
+}
+function allStringsJoined(val: LangObj): string {
+  if (!val) return '';
+  if (typeof val === 'string') return val;
+  const vals = Object.values(val).filter((v): v is string => typeof v === 'string');
+  return vals.join(' | ');
+}
+
+/* ---------- Cache IO ---------- */
+async function readCache(): Promise<AnyObj | null> {
+  try {
+    const text = await fs.readFile(CACHE_FILE, 'utf8');
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+async function writeCache(json: AnyObj) {
+  await fs.mkdir(CACHE_DIR, { recursive: true });
+  await fs.writeFile(CACHE_FILE, JSON.stringify(json), 'utf8');
+}
+
+/* ---------- Upstream fetch (paged aggregation) ---------- */
+async function fetchPage(start: number, pageSize: number) {
+  const payload = {
+    queryString: FIXED_QUERY,
+    paginationStart: start,
+    paginationPageSize: pageSize,
+    sortField: null,
+    sortLocale: null,
+    sortDirection: null,
+  };
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`API ${res.status} ${res.statusText}${t ? ` — ${t.slice(0, 200)}` : ''}`);
+  }
+  return res.json() as Promise<{ total?: number; items?: AnyObj[] }>;
+}
+async function fetchAll(): Promise<{ total: number; items: AnyObj[] }> {
+  const first = await fetchPage(0, PAGE_SIZE);
+  const total = typeof first.total === 'number' ? first.total : (first.items?.length ?? 0);
+  const items: AnyObj[] = Array.isArray(first.items) ? [...first.items] : [];
+  const cap = Math.min(total, MAX_ITEMS);
+  let nextStart = items.length;
+  while (nextStart < cap) {
+    try {
+      const page = await fetchPage(nextStart, PAGE_SIZE);
+      const arr = Array.isArray(page.items) ? page.items : [];
+      if (arr.length === 0) break;
+      items.push(...arr);
+      nextStart += arr.length;
+    } catch {
+      break;
+    }
+  }
+  return { total, items: items.slice(0, cap) };
+}
+
+/* ---------- Mapping & filter ---------- */
+function filterByStudyTitle(items: AnyObj[], query: string): AnyObj[] {
+  const q = (query ?? '').trim().toLowerCase();
+  if (!q) return items; // empty -> all
+  return items.filter((item) => {
+    const combined = allStringsJoined(item?.studyVersionTitle).toLowerCase();
+    return combined.includes(q);
+  });
+}
+function toDisplay(item: AnyObj, langPrefs: string[]) {
+  const title = firstString(item?.studyVersionTitle, langPrefs) ?? 'Untitled';
+  const abstract = firstString(item?.studyVersionAbstract, langPrefs) ?? '';
+  const refNo = item?.studyReferenceNumber ? String(item.studyReferenceNumber) : undefined;
+
+  let year: string | undefined;
+  if (typeof item?.studyVersionEndDate === 'string') {
+    const m = item.studyVersionEndDate.match(/(19|20)\d{2}/);
+    if (m) year = m[0];
+  }
+
+  let link: { href: string; label: string } | undefined;
+  if (item?.doi) {
+    const d = String(item.doi).trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '');
+    link = { href: `https://doi.org/${d}`, label: 'DOI' };
+  } else if (item?.handle) {
+    link = { href: `https://hdl.handle.net/${String(item.handle)}`, label: 'Handle' };
+  } else if (item?.landingPage) {
+    link = { href: String(item.landingPage), label: 'Landing Page' };
+  } else if (item?.url) {
+    link = { href: String(item.url), label: 'URL' };
+  }
+
+  const descText = abstract || '';
+  const description = descText.length > 160 ? `${descText.slice(0, 157)}…` : descText;
+
+  const citationParts: string[] = [];
+  if (year) citationParts.push(`(${year})`);
+  citationParts.push(`${title}.`);
+  if (refNo) citationParts.push(`Swissubase Study #${refNo}.`);
+  if (link?.href) citationParts.push(link.href);
+  const citation = citationParts.join(' ');
+
+  return { title, year, link, description, refNo, citation, _raw: item };
+}
+
+/* ---------- SSR flow ---------- */
+const locale = getPreferredLocale(Astro);
+const ui = UI[locale];
+
+const userQuery = Astro.url.searchParams.get('q') ?? '';
+const langPrefs = [locale, ...parseAcceptLanguage(Astro.request.headers.get('accept-language') ?? ''), 'en', 'de', 'fr'];
+
+let data: { total?: number; items?: AnyObj[] } | null = null;
+let items: AnyObj[] = [];
+let filtered: AnyObj[] = [];
+let usingCache = false;
+let errorMsg: string | null = null;
+let cacheInfo: { mtime?: string } = {};
+let totalFromApi: number | undefined = undefined;
+
+try {
+  const aggregated = await fetchAll();
+  data = aggregated;
+  await writeCache(aggregated);
+} catch (err: any) {
+  data = await readCache();
+  usingCache = true;
+  errorMsg = `Live update failed: ${err?.message ?? 'Unknown error'}. Showing cached data.`;
+}
+
+if (data) {
+  totalFromApi = typeof data.total === 'number' ? data.total : undefined;
+  items = Array.isArray(data.items) ? data.items : [];
+  filtered = filterByStudyTitle(items, userQuery);
+  try {
+    const stat = await fs.stat(CACHE_FILE);
+    cacheInfo.mtime = stat.mtime.toISOString();
+  } catch {}
+} else {
+  items = [];
+  filtered = [];
+  errorMsg = errorMsg ?? 'No data available (no cache found yet).';
+}
+
+const displayItems = filtered.map(i => toDisplay(i, langPrefs));
+
+// Load localized Home content
+const contentSlug = `home${locale}`;
+let heroEntry = await getEntry('pages', contentSlug);
+if (!heroEntry) heroEntry = await getEntry('pages', 'homeen');
+const { Content: HomeBody } = await heroEntry.render();
+const hero = heroEntry.data;
 ---
+<BaseLayout title={(hero.title ?? 'Home')} locale={locale}>
+  <section class="hero">
+    <h1>{hero.title}</h1>
+    {hero.subtitle && <p>{hero.subtitle}</p>}
 
-<Layout>
-	<Welcome />
-</Layout>
+    <form class="search" method="GET" role="search" id="searchForm">
+      <input
+        type="search"
+        name="q"
+        id="q"
+        placeholder={ui.search.placeholder}
+        value={userQuery}
+        autocomplete="off"
+      />
+      <button type="submit">{ui.search.searchBtn}</button>
+      <button type="button" id="clearBtn" class="btn-secondary">{ui.search.clearBtn}</button>
+    </form>
+
+    {errorMsg && (
+      <div class={usingCache ? 'banner warn' : 'banner err'}>
+        {errorMsg}
+      </div>
+    )}
+
+    {cacheInfo.mtime && (
+      <p class="muted">Last cache update: <strong>{cacheInfo.mtime}</strong></p>
+    )}
+    <p class="muted">
+      Remote payload is fixed: <code>{"{queryString:'linguistics', paginationStart:0, paginationPageSize:50}"}</code>.
+      Aggregated up to <strong>{Math.min(items.length, 200)}</strong> items (server-side).
+    </p>
+    {typeof totalFromApi === 'number' && (
+      <p class="muted">API reported total for this payload: <strong>{totalFromApi}</strong></p>
+    )}
+  </section>
+
+  <section style="margin: .5rem 0 1rem 0;">
+    <HomeBody />
+  </section>
+
+  {displayItems.length === 0 ? (
+    <div class="empty">No entries to display.</div>
+  ) : (
+    <>
+      <div class="counts">
+        {ui.counts.showingOf(displayItems.length, items.length)}
+      </div>
+
+      <div class="cards" id="cards"
+           data-copy-copy={UI[locale].copy.copy}
+           data-copy-copied={UI[locale].copy.copied}
+           data-copy-copying={UI[locale].copy.copying}
+           data-copy-failed={UI[locale].copy.failed}>
+        {displayItems.map((d, idx) => (
+          <article class="card" data-index={idx}>
+            <h3>{d.title}</h3>
+            <div class="meta">
+              {d.refNo ? <span>Swissubase #{d.refNo}</span> : null}
+              {d.refNo && d.year ? ' · ' : null}
+              {d.year ? <span>{d.year}</span> : null}
+            </div>
+
+            {d.description ? <p class="muted">{d.description}</p> : <p class="muted">No description available.</p>}
+
+            <div class="actions">
+              {d.link ? <a class="primary-link" href={d.link.href} target="_blank" rel="noopener noreferrer">{d.link.label}</a> : null}
+              {(d.citation && d.citation.length > 5) && (
+                <button
+                  type="button"
+                  class="btn-ghost btn-copy"
+                  data-citation={d.citation}
+                  aria-label={UI[locale].copy.copy}
+                  title={UI[locale].copy.copy}
+                >
+                  {UI[locale].copy.copy}
+                </button>
+              )}
+            </div>
+
+            <details style="margin-top:.5rem;">
+              <summary>Raw JSON</summary>
+              <pre>{JSON.stringify(d._raw, null, 2)}</pre>
+            </details>
+          </article>
+        ))}
+      </div>
+
+      <div class="pagination" id="pagination">
+        <button type="button" class="page-btn" id="prevBtn">Previous</button>
+        <span id="pageInfo" aria-live="polite"></span>
+        <button type="button" class="page-btn" id="nextBtn">Next</button>
+
+        <span class="page-size">
+          <label for="pageSize">Per page</label>
+          <select id="pageSize">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+          </select>
+        </span>
+      </div>
+    </>
+  )}
+
+  <!-- Client page script (TypeScript) -->
+  <script type="module" src="/src/scripts/searchPage.ts"></script>
+</BaseLayout>

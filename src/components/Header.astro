@@ -1,0 +1,62 @@
+---
+import { UI, type Locale } from '../i18n/strings';
+
+const { locale } = Astro.props;
+const ui = UI[locale];
+const path = Astro.url.pathname;
+const isActive = (href: string) => (path === href ? 'active' : '');
+
+const homeUrl = `/?lang=${locale}`;
+const infoUrl = `/furtherinformation?lang=${locale}`;
+const contactUrl = `/contact?lang=${locale}`;
+---
+
+<header class="site-header" role="banner">
+  <div class="container header-inner">
+    <!-- LEFT: Brand only -->
+    <div class="header-left">
+      <div class="brand">Your Org</div>
+    </div>
+
+    <!-- CENTER: Main navigation (desktop); becomes drawer on mobile -->
+    <div class="header-center">
+      <nav id="site-nav" class="site-nav" role="navigation">
+        <a id="nav-home" href={homeUrl} class={isActive('/')}
+          aria-current={path === '/' ? 'page' : undefined}>{ui.nav.home}</a>
+        <a id="nav-info" href={infoUrl} class={isActive('/furtherinformation')}
+          aria-current={path === '/furtherinformation' ? 'page' : undefined}>{ui.nav.info}</a>
+        <a id="nav-contact" href={contactUrl} class={isActive('/contact')}
+          aria-current={path === '/contact' ? 'page' : undefined}>{ui.nav.contact}</a>
+
+        <!-- MOBILE (drawer) language switch, centered at bottom -->
+        <div class="lang-switch lang-switch--drawer" role="navigation" aria-label={ui.langLabel}>
+          <a href="#" data-lang-switch="en" class={locale === 'en' ? 'active' : undefined}>{ui.langShort.en}</a>
+          <a href="#" data-lang-switch="de" class={locale === 'de' ? 'active' : undefined}>{ui.langShort.de}</a>
+          <a href="#" data-lang-switch="fr" class={locale === 'fr' ? 'active' : undefined}>{ui.langShort.fr}</a>
+        </div>
+      </nav>
+    </div>
+
+    <!-- RIGHT: Desktop language switch + mobile hamburger -->
+    <div class="header-right">
+      <!-- DESKTOP language switch (far right) -->
+      <nav class="lang-switch lang-switch--desktop" aria-label={ui.langLabel}>
+        <a href="#" data-lang-switch="en" class={locale === 'en' ? 'active' : undefined}>{ui.langShort.en}</a>
+        <a href="#" data-lang-switch="de" class={locale === 'de' ? 'active' : undefined}>{ui.langShort.de}</a>
+        <a href="#" data-lang-switch="fr" class={locale === 'fr' ? 'active' : undefined}>{ui.langShort.fr}</a>
+      </nav>
+
+      <!-- Mobile drawer toggle -->
+      <button
+        class="nav-toggle"
+        aria-label="Open navigation menu"
+        aria-controls="site-nav"
+        aria-expanded="false"
+      >
+        ☰ <span class="sr-only">Menu</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="backdrop" id="backdrop" hidden></div>

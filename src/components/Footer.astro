@@ -1,0 +1,12 @@
+---
+import { UI, type Locale } from '../i18n/strings';
+
+const { locale } = Astro.props;
+const ui = UI[locale];
+---
+
+<footer class="site-footer" role="contentinfo">
+  <div class="container">
+    <p>{ui.footer.contact}</p>
+  </div>
+</footer>
